@@ -1,0 +1,352 @@
+---
+title: "XAI3"
+author: "Maria, Alba"
+date: "2026-04-28"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+#install.packages("tidyverse")
+#install.packages("randomForest")
+#install.packages("pdp")
+#install.packages("ggplot2")
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# Cargar librerías
+library(tidyverse)
+library(randomForest)
+library(pdp)
+library(ggplot2)
+
+# Para que los resultados sean reproducibles
+set.seed(123)
+
+```
+
+
+#LOAD AND PREPARE BIKE DATASET
+
+```{r}
+# 1. Load the bike rental dataset
+bike_data <- read.csv("day.csv")
+
+# 2. Prepare and denormalize variables (IGUAL QUE EN XAI1)
+bike_model_data <- bike_data %>%
+  mutate(
+    # One-hot encoding para la estación
+    season_2 = ifelse(season == 2, 1, 0),
+    season_3 = ifelse(season == 3, 1, 0),
+    season_4 = ifelse(season == 4, 1, 0),
+    
+    # Variables del clima
+    MISTY = ifelse(weathersit == 2, 1, 0),
+    RAIN = ifelse(weathersit %in% c(3, 4), 1, 0),
+    
+    # Desnormalización (MUY IMPORTANTE PARA LOS GRÁFICOS PDP)
+    hum = hum * 100,                                
+    windspeed = windspeed * 67,                     
+    temp = temp * (39 - (-8)) + (-8),               
+    
+    # Días transcurridos
+    days_since_2011 = as.numeric(as.Date(dteday) - as.Date("2011-01-01"))
+  ) %>%
+  # Ahora sí, seleccionamos solo las variables finales que vamos a usar en el Random Forest
+  select(cnt, days_since_2011, temp, hum, windspeed, season_2, season_3, season_4, 
+         yr, mnth, holiday, weekday, workingday, MISTY, RAIN)
+```
+
+
+#TRAIN RANDOM FOREST MODEL
+
+```{r}
+# Train the Random Forest model to predict bike rentals
+bike_rf <- randomForest(
+  cnt ~ .,              # Predict 'cnt' using all available features
+  data = bike_model_data,
+  ntree = 500,          # Number of trees in the forest
+  importance = TRUE     # Compute variable importance
+)
+
+# Display model summary
+print(bike_rf)
+
+# Display variable importance values
+importance(bike_rf)
+
+# Plot variable importance
+varImpPlot(bike_rf)
+```
+
+#PDP - DAYS SINCE 2011
+```{r}
+# Compute the Partial Dependence Plot for 'instant'
+pdp_instant <- partial(
+  object = bike_rf,
+  pred.var = "days_since_2011",        # Variable to analyze
+  train = bike_model_data,
+  grid.resolution = 50         # Number of points to evaluate
+)
+
+# Plot the PDP
+plot_instant <- autoplot(pdp_instant) +
+  labs(
+    title = "PDP - Influence of days since 2011",
+    x = "Days since 2011",
+    y = "Predicted bike rentals"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(plot_instant)
+```
+
+
+
+#PDP - TEMPERATURE
+
+```{r}
+# Compute the Partial Dependence Plot for 'temp'
+pdp_temp <- partial(
+  object = bike_rf,
+  pred.var = "temp",          # Variable to analyze
+  train = bike_model_data,
+  grid.resolution = 50        # Number of evaluation points
+)
+
+# Plot the PDP
+plot_temp <- autoplot(pdp_temp) +
+  labs(
+    title = "PDP - Influence of temperature",
+    x = "Temperature (ºC)",
+    y = "Predicted bike rentals"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(plot_temp)
+```
+
+#PDP - HUMIDITY
+
+```{r}
+# Compute the Partial Dependence Plot for 'hum'
+pdp_hum <- partial(
+  object = bike_rf,
+  pred.var = "hum",          # Variable to analyze
+  train = bike_model_data,
+  grid.resolution = 50       # Number of evaluation points
+)
+
+# Plot the PDP
+plot_hum <- autoplot(pdp_hum) +
+  labs(
+    title = "PDP - Influence of humidity",
+    x = "Humidity (%)",
+    y = "Predicted bike rentals"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(plot_hum)
+```
+
+#PDP - WIND SPEED
+
+```{r}
+# Compute the Partial Dependence Plot for 'windspeed'
+pdp_wind <- partial(
+  object = bike_rf,
+  pred.var = "windspeed",    # Variable to analyze
+  train = bike_model_data,
+  grid.resolution = 50       # Number of evaluation points
+)
+
+# Plot the PDP
+plot_wind <- autoplot(pdp_wind) +
+  labs(
+    title = "PDP - Influence of wind speed",
+    x = "Wind speed (km/h)",
+    y = "Predicted bike rentals"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(plot_wind)
+```
+
+
+#PDP 2D - TEMPERATURE AND HUMIDITY
+
+```{r}
+# Create heatmap (PDP 2D)
+pdp_temp_hum <- partial(bike_rf, pred.var = c("temp", "hum"), chull = FALSE)
+plot_temp_hum <- ggplot(pdp_temp_hum, aes(x = temp, y = hum, fill = yhat)) +
+  geom_tile(width = 2, height = 4) +   # <-- CAMBIAMOS EL TAMAÑO AQUÍ
+  labs(
+    title = "2D PDP - Temperature and Humidity",
+    x = "Temperature (ºC)",            # <-- Aprovechamos para poner las unidades reales
+    y = "Humidity (%)",
+    fill = "Prediction"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(plot_temp_hum)
+
+# Add real data distribution on top of the PDP
+plot_temp_hum_density <- ggplot(pdp_temp_hum, aes(x = temp, y = hum, fill = yhat)) +
+  geom_tile(width = 2, height = 4) +   
+  geom_density_2d(
+    data = bike_model_data,
+    aes(x = temp, y = hum),
+    inherit.aes = FALSE,
+    color = "black"
+  ) +
+  labs(
+    title = "2D PDP with data distribution",
+    x = "Temperature (ºC)",
+    y = "Humidity (%)",
+    fill = "Prediction"
+  ) +
+  theme_minimal()
+
+# Display the plot with density
+print(plot_temp_hum_density)
+```
+
+
+#HOUSE DATA - LOADING AND PREPARATION
+```{r}
+# Load the house dataset
+house_data <- read.csv("kc_house_data.csv")
+
+# Display the first rows of the dataset
+head(house_data)
+
+# Select relevant variables for the model
+house_model_data <- house_data %>%
+  select(
+    price,
+    bedrooms,
+    bathrooms,
+    sqft_living,
+    sqft_lot,
+    floors,
+    yr_built
+  )
+
+summary(house_model_data)
+
+set.seed(123) # Fija la aleatoriedad
+house_sample <- house_model_data %>%
+  sample_n(3000)
+
+house_rf <- randomForest(
+  price ~ .,
+  data = house_sample,
+  ntree = 500,
+  importance = TRUE
+)
+
+print(house_rf)
+
+
+importance(house_rf)
+varImpPlot(house_rf)
+```
+
+#PDP — bedrooms
+
+```{r}
+pdp_bedrooms <- partial(
+  object = house_rf,
+  pred.var = "bedrooms",
+  train = house_sample,
+  grid.resolution = 20
+)
+
+plot_bedrooms <- autoplot(pdp_bedrooms) +
+  labs(
+    title = "PDP - Influence of bedrooms",
+    x = "Number of bedrooms",
+    y = "Predicted house price"
+  ) +
+  theme_minimal()
+
+print(plot_bedrooms)
+
+```
+
+#PDP - BATHROOMS
+```{r}
+pdp_bathrooms <- partial(
+  object = house_rf,
+  pred.var = "bathrooms",
+  train = house_sample,
+  grid.resolution = 20
+)
+
+plot_bathrooms <- autoplot(pdp_bathrooms) +
+  labs(
+    title = "PDP - Influence of bathrooms",
+    x = "Number of bathrooms",
+    y = "Predicted house price"
+  ) +
+  theme_minimal()
+
+print(plot_bathrooms)
+```
+
+#PDP - SQFT LIVING
+```{r}
+pdp_sqft_living <- partial(
+  object = house_rf,
+  pred.var = "sqft_living",
+  train = house_sample,
+  grid.resolution = 50
+)
+
+plot_sqft_living <- autoplot(pdp_sqft_living) +
+  labs(
+    title = "PDP - Influence of living area",
+    x = "sqft_living",
+    y = "Predicted house price"
+  ) +
+  theme_minimal()
+
+print(plot_sqft_living)
+```
+
+
+#PDP - FLOORS
+
+```{r}
+pdp_floors <- partial(
+  object = house_rf,
+  pred.var = "floors",
+  train = house_sample,
+  grid.resolution = 20
+)
+
+plot_floors <- autoplot(pdp_floors) +
+  labs(
+    title = "PDP - Influence of number of floors",
+    x = "Number of floors",
+    y = "Predicted house price"
+  ) +
+  theme_minimal()
+
+print(plot_floors)
+```
+
+
+
+
